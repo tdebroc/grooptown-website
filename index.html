@@ -448,6 +448,38 @@
     .mobile-menu a { font-family: 'Space Grotesk'; font-size: 1.7rem; font-weight: 600; color: var(--text-dim); padding: 12px; transition: color 0.25s; }
     .mobile-menu a:hover { color: var(--cyan); }
 
+    /* ============================ MOTION PROMPT (mobile) =============== */
+    .motion-prompt {
+      position: fixed;
+      left: 50%; bottom: 22px;
+      transform: translate(-50%, 28px);
+      z-index: 150;
+      display: flex; align-items: center; gap: 12px;
+      max-width: calc(100vw - 28px);
+      padding: 10px 12px 10px 18px;
+      border-radius: 100px;
+      background: rgba(10, 13, 22, 0.92);
+      backdrop-filter: blur(14px) saturate(160%);
+      -webkit-backdrop-filter: blur(14px) saturate(160%);
+      border: 1px solid var(--border);
+      box-shadow: 0 12px 40px -10px rgba(0,0,0,0.6), 0 0 26px -10px var(--glow-cyan);
+      opacity: 0;
+      transition: opacity 0.35s var(--ease), transform 0.35s var(--ease);
+    }
+    .motion-prompt.show { opacity: 1; transform: translate(-50%, 0); }
+    .motion-prompt span { font-size: 0.88rem; color: var(--text-dim); white-space: nowrap; }
+    .motion-prompt .mp-enable {
+      font-family: 'Space Grotesk'; font-weight: 600; font-size: 0.85rem;
+      color: #04060c; cursor: pointer; border: 0;
+      padding: 8px 15px; border-radius: 100px;
+      background: var(--accent-grad);
+    }
+    .motion-prompt .mp-close {
+      background: none; border: 0; color: var(--text-faint);
+      font-size: 1.3rem; line-height: 1; cursor: pointer; padding: 4px 6px;
+    }
+    .motion-prompt .mp-close:hover { color: var(--text); }
+
     /* ============================ RESPONSIVE =========================== */
     @media (max-width: 880px) {
       .nav-links { display: none; }
@@ -658,8 +690,8 @@
           <span class="section-tag">Get in touch</span>
           <h2>Let's build something<br><span class="gradient-text">data-driven</span> together</h2>
           <p>Tell us about your data challenge — platforms, governance, or training. We'll reply with a concrete way forward.</p>
-          <a href="mailto:contact-from-website@grooptown.com" class="btn btn-primary">Contact us <span class="arrow">→</span></a>
-          <div class="email-link">or email us at <a href="mailto:contact-from-website@grooptown.com">contact-from-website@grooptown.com</a></div>
+          <a href="mailto:team@grooptown.com" class="btn btn-primary">Contact us <span class="arrow">→</span></a>
+          <div class="email-link">or email us at <a href="mailto:team@grooptown.com">team@grooptown.com</a></div>
         </div>
       </div>
     </section>
@@ -675,7 +707,7 @@
       <div class="copy">Copyright © 2026 Grooptown — Data Engineering Consulting</div>
       <div class="f-links">
         <a href="https://www.linkedin.com/company/grooptown" target="_blank" rel="noopener">LinkedIn</a>
-        <a href="mailto:contact-from-website@grooptown.com">Email</a>
+        <a href="team@grooptown.com">Email</a>
       </div>
     </div>
   </footer>
@@ -701,6 +733,12 @@
     const LINK_DIST = 13;        // connect nodes within this distance
     const SPREAD = 46;
     const pointer = { x: 0, y: 0, tx: 0, ty: 0 };
+    // Device-orientation (gyroscope) parallax for touch devices.
+    // We feed tilt into the SAME pointer targets the mouse uses, so the eased
+    // parallax in the animate loop works unchanged.
+    let orientationActive = false;     // true once we start receiving tilt
+    let orientationBaseline = null;    // captured neutral tilt (first reading)
+    const TILT_RANGE = 26;             // degrees of tilt mapped to full parallax
     let scrollT = 0;
     let running = true;
 
@@ -729,8 +767,75 @@
       window.addEventListener('pointermove', onPointerMove, { passive: true });
       window.addEventListener('scroll', onScroll, { passive: true });
       document.addEventListener('visibilitychange', () => { running = !document.hidden; if (running) animate(); });
+      setupDeviceOrientation();
 
       animate();
+    }
+
+    // ---- Gyroscope parallax (mobile) -----------------------------------
+    // Tilting the phone left/right/forward/back moves the graph, mirroring the
+    // desktop mouse parallax. iOS 13+ gates DeviceOrientationEvent behind an
+    // explicit, user-gesture permission request, so we show a small prompt for
+    // those devices; everywhere else we just start listening.
+    function setupDeviceOrientation() {
+      if (prefersReduced) return;
+      if (typeof DeviceOrientationEvent === 'undefined') return;
+      // Only relevant on touch devices (mouse devices already have parallax).
+      if (!window.matchMedia('(pointer: coarse)').matches) return;
+
+      const needsPermission = typeof DeviceOrientationEvent.requestPermission === 'function';
+      if (needsPermission) {
+        showMotionPrompt(() => {
+          DeviceOrientationEvent.requestPermission()
+            .then(state => { if (state === 'granted') startOrientation(); })
+            .catch(() => {});
+        });
+      } else {
+        startOrientation();
+      }
+    }
+
+    function startOrientation() {
+      window.addEventListener('deviceorientation', onDeviceOrientation, { passive: true });
+    }
+
+    function onDeviceOrientation(e) {
+      // gamma: left/right tilt (-90..90), beta: front/back tilt (-180..180)
+      if (e.gamma == null && e.beta == null) return;
+      let g = e.gamma || 0;
+      let b = e.beta || 0;
+
+      // In landscape, gamma/beta swap roles — keep parallax intuitive.
+      const landscape = Math.abs(window.orientation) === 90;
+      let lr = landscape ? b : g;   // left-right
+      let fb = landscape ? g : b;   // front-back
+
+      // Capture the pose at first reading as the neutral baseline so the user
+      // doesn't have to hold the phone perfectly flat.
+      if (!orientationBaseline) orientationBaseline = { lr, fb };
+      lr -= orientationBaseline.lr;
+      fb -= orientationBaseline.fb;
+
+      orientationActive = true;
+      pointer.tx = clamp(lr / TILT_RANGE, -1, 1) * 0.5;
+      pointer.ty = clamp(fb / TILT_RANGE, -1, 1) * 0.5;
+    }
+
+    function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+    // Tiny dismissible prompt (iOS permission requires a tap).
+    function showMotionPrompt(onEnable) {
+      const wrap = document.createElement('div');
+      wrap.className = 'motion-prompt';
+      wrap.innerHTML =
+        '<span>Tilt to explore the graph</span>' +
+        '<button type="button" class="mp-enable">Enable motion</button>' +
+        '<button type="button" class="mp-close" aria-label="Dismiss">&times;</button>';
+      document.body.appendChild(wrap);
+      requestAnimationFrame(() => wrap.classList.add('show'));
+      const dismiss = () => { wrap.classList.remove('show'); setTimeout(() => wrap.remove(), 350); };
+      wrap.querySelector('.mp-enable').addEventListener('click', () => { onEnable(); dismiss(); });
+      wrap.querySelector('.mp-close').addEventListener('click', dismiss);
     }
 
     function rand(min, max) { return Math.random() * (max - min) + min; }
@@ -835,6 +940,9 @@
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     }
     function onPointerMove(e) {
+      // A genuine mouse/trackpad move takes priority over gyroscope input.
+      if (e.pointerType && e.pointerType !== 'mouse') return;
+      orientationActive = false;
       pointer.tx = (e.clientX / window.innerWidth - 0.5);
       pointer.ty = (e.clientY / window.innerHeight - 0.5);
     }
